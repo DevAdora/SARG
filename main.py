@@ -11,6 +11,7 @@ from gpiozero.pins.pigpio import PiGPIOFactory
 import subprocess
 import queue
 
+
 current_function = None
 stop_flag = False
 
@@ -18,8 +19,9 @@ def run_file():
     subprocess.call(["/run_myfile.sh"])
 
 
-button_pin_raigen = 24  # GPIO pin for RAIGEN button  
-button_pin_raint = 23   # GPIO pin for RAINT button
+button_pin_raigen = 23
+button_pin_raint = 22
+terminate_button = 16
 RAIGEN = 'raigen'
 RAINT = 'raint'
 
@@ -31,6 +33,7 @@ factory = PiGPIOFactory()
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(button_pin_raigen, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(button_pin_raint, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(terminate_button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 r = sr.Recognizer()
 mic = sr.Microphone()
@@ -47,12 +50,18 @@ y_offset = 0
 oled.fill(0)
 oled.show()
 
-font_path = '/home/qwerty/sarg/font/Roboto/Roboto-Black.ttf'
+font_path = '/home/qwerty/sarg/font/Roboto_Mono/static/RobotoMono-SemiBold.ttf'
 font_size = 16
 font = ImageFont.truetype(font_path, font_size)
 
 image = Image.new('1', (oled.width, oled.height))
 draw = ImageDraw.Draw(image)
+
+def terminate_program():
+    print("Shutdown button pressed, terminating the program...")
+    clear_display()
+    GPIO.cleanup()
+    exit(0)
 
 def debounce_button(button_pin):
     last_state = GPIO.input(button_pin)
@@ -187,9 +196,9 @@ def RAINT():
     display_thread.start()
 
     r = sr.Recognizer()
-    r.energy_threshold = 300  # Adjust based on your environment
+    r.energy_threshold = 300 
     r.dynamic_energy_threshold = False
-    r.pause_threshold = 0.8  # Shorter pause to detect end of speech
+    r.pause_threshold = 0.8  
     
     audio_queue = queue.Queue()
     text_queue = queue.Queue()
@@ -200,14 +209,17 @@ def RAINT():
             print("Adjusted for ambient noise. Now listening...")
             while not stop_flag:  # Check the stop flag before each loop
                 try:
-                    audio = r.listen(source, phrase_time_limit=3)
+                    audio = r.listen(source)
                     audio_queue.put(audio)
                 except sr.WaitTimeoutError:
                     pass
 
     def audio_consumer():
-        while not stop_flag:  # Check the stop flag in the consumer loop as well
+        while not stop_flag:
             if GPIO.input(button_pin_raigen) == GPIO.LOW or GPIO.input(button_pin_raint) == GPIO.LOW:
+                break
+            elif GPIO.input(terminate_button) == GPIO.LOW:
+                terminate_program()
                 break
             try:
                 audio = audio_queue.get(timeout=1)
@@ -232,6 +244,9 @@ def RAINT():
         while True:
             if GPIO.input(button_pin_raigen) == GPIO.LOW or GPIO.input(button_pin_raint) == GPIO.LOW:
                 break
+            elif GPIO.input(terminate_button) == GPIO.LOW:
+                terminate_program()
+                break
             try:
                 text = text_queue.get(timeout=0.1)
                 with words_lock:
@@ -247,35 +262,32 @@ def RAINT():
 
 # OBJECT DETECTION -----------------------------------
 
-sensor = DistanceSensor(echo=echo_pin, trigger=trig_pin, pin_factory=factory)
+# sensor = DistanceSensor(echo=echo_pin, trigger=trig_pin, pin_factory=factory)
 
 def RAIGEN():
+    from object_detection.object_detection_main import runObjDetection
     global stop_flag
     stop_flag = False  # Reset the stop flag at the beginning of the function
     while not stop_flag:  # Check the stop flag in the loop
       
         if GPIO.input(button_pin_raint) == GPIO.LOW:
             print("Switching to RAINT...")
-            break  
+            break
+        elif GPIO.input(terminate_button) == GPIO.LOW:
+            terminate_program()
+            break
 
-        print(f"Distance: {sensor.distance * 100:.1f} cm")
-        time.sleep(1)  
+        # print(f"Distance: {sensor.distance * 100:.1f} cm")
+        # time.sleep(1)  
+        print("RAIGEN function initializing")
+        runObjDetection()
 
 # MAIN -----------------------------------
 def main_loop():
     global current_function, stop_flag  
 
     while True:
-        if GPIO.input(button_pin_raigen) == GPIO.LOW:
-            if current_function != RAIGEN:
-                stop_flag = True
-                time.sleep(0.5)  # Wait for the other function to stop
-                current_function = 'RAIGEN'
-                clear_display()
-                print("Switched to RAIGEN")
-                RAIGEN()
-            
-        elif GPIO.input(button_pin_raint) == GPIO.LOW: 
+        if GPIO.input(button_pin_raint) == GPIO.LOW: 
             if current_function != RAINT:
                 stop_flag = True
                 time.sleep(0.5)  # Wait for the other function to stop
@@ -284,7 +296,19 @@ def main_loop():
                 display_text_with_animation(welcome_words_raint)
                 clear_display()
                 RAINT()
+        elif GPIO.input(button_pin_raigen) == GPIO.LOW:
+            if current_function != RAIGEN:
+                stop_flag = True
+                time.sleep(0.5)  # Wait for the other function to stop
+                current_function = 'RAIGEN'
+                clear_display()
+                print("Switched to RAIGEN")
+                RAIGEN()
+            
+       
 
+        elif GPIO.input(terminate_button) == GPIO.LOW:
+            terminate_program()
 
         time.sleep(0.1)
             
