@@ -1,8 +1,17 @@
 import cv2
 import threading
-
+import numpy as np
+import RPi.GPIO as GPIO
 
 thres = 0.45  # Threshold to detect object
+button_pin_raigen = 23
+button_pin_raint = 22
+terminate_button = 16
+RAIGEN = 'raigen'
+frame_count = 0
+RAINT = 'raint'
+focal = 450  # Adjust according to your setup
+width = 4  # Example width of object for distance calculation (adjust as necessary)
 
 # Load class names from coco.names file
 classFile = '/home/qwerty/sarg/object_detection/coco.names'
@@ -13,6 +22,11 @@ classNames = []
 with open(classFile, 'rt') as f:
     classNames = f.read().rstrip('\n').split('\n')
 
+# Initialize GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(button_pin_raigen, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(button_pin_raint, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(terminate_button, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 # Initialize the detection model
 net = cv2.dnn_DetectionModel(weightsPath, configPath)
@@ -20,20 +34,29 @@ net.setInputSize(320, 320)
 net.setInputScale(1.0 / 127.5)
 net.setInputMean((127.5, 127.5, 127.5))
 net.setInputSwapRB(True)
+
+def get_dist(box, image):
+    w = box[2] 
+    if w > 0: 
+        dist = (width * focal) / w  
+        print(f"Bounding box width: {w}, Calculated Distance: {dist:.2f} cm")  # Debug: Print the distance
+        image = cv2.putText(image, f'Distance: {dist:.2f} cm', (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    else:
+        print("No valid bounding box for distance calculation")
+    return image
+
+# Object Detection
 def getObjects(img, draw=True):
     classIds, confs, bbox = net.detect(img, confThreshold=thres)
-    objectInfo=[]
+    objectInfo = []
     if len(classIds) != 0:
         for classId, confidence, box in zip(classIds.flatten(), confs.flatten(), bbox):
             className = classNames[classId - 1]
             objectInfo.append([box, className])
-            if (draw):
-                    
+            if draw:
                 cv2.rectangle(img, box, color=(0, 255, 0), thickness=2)
-                cv2.putText(img,className.upper(), (box[0] + 10, box[1] + 30),
-                            cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(img, str(round(confidence * 100, 2)), (box[0] + 200, box[1] + 30),
-                            cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(img, className.upper(), (box[0] + 10, box[1] + 30), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(img, str(round(confidence * 100, 2)), (box[0] + 200, box[1] + 30), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
     return img, objectInfo
 
 class VideoStream:
@@ -58,22 +81,30 @@ class VideoStream:
     def stop(self):
         self.stopped = True
 
+# Main function
 if __name__ == "__main__":
-    stream = VideoStream(0).start()  # Or use GStreamer
+    stream = VideoStream(0).start()  
 
-    frame_count = 0
     while True:
         img = stream.read()
         if img is None:
             continue
+        frame_count += 1
+        if frame_count % 3 == 0: 
+            result, objectInfo = getObjects(img, False)
+            print(objectInfo)
+        
+            if objectInfo:
+                box, className = objectInfo[0]  # Get the first detected object
+                img = get_dist(box, img)  # Calculate and display distance
 
-        result, objectInfo = getObjects(img, False)
-        print(objectInfo)
-        cv2.imshow("Live Video", img)
+        # Display the video feed
+            cv2.imshow("Live Video", result)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        # Exit on 'q' key press
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
+    # Cleanup
     stream.stop()
     cv2.destroyAllWindows()
- 
