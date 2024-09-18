@@ -3,13 +3,12 @@ import threading
 import numpy as np
 import RPi.GPIO as GPIO
 
+# Thresholds and GPIO Pins
 thres = 0.45  # Threshold to detect object
+nms_threshold = 0.2
 button_pin_raigen = 23
 button_pin_raint = 22
 terminate_button = 16
-RAIGEN = 'raigen'
-frame_count = 0
-RAINT = 'raint'
 focal = 450  # Adjust according to your setup
 width = 4  # Example width of object for distance calculation (adjust as necessary)
 
@@ -45,18 +44,32 @@ def get_dist(box, image):
         print("No valid bounding box for distance calculation")
     return image
 
-# Object Detection
 def getObjects(img, draw=True):
     classIds, confs, bbox = net.detect(img, confThreshold=thres)
+    
+    # Ensure bbox, confs, and classIds are lists
+    bbox = list(bbox)
+    confs = list(np.array(confs).reshape(1, -1)[0])
+    classIds = list(np.array(classIds).flatten())
+    
+    indices = cv2.dnn.NMSBoxes(bbox, confs, thres, nms_threshold)
     objectInfo = []
-    if len(classIds) != 0:
-        for classId, confidence, box in zip(classIds.flatten(), confs.flatten(), bbox):
-            className = classNames[classId - 1]
+    
+    if len(indices) > 0:
+        for i in indices.flatten():  # Flatten the indices
+            box = bbox[i]
+            classId = classIds[i]
+            confidence = confs[i]
+            className = classNames[classId - 1]  # Adjust classId for zero-based index
+            
             objectInfo.append([box, className])
+            
             if draw:
-                cv2.rectangle(img, box, color=(0, 255, 0), thickness=2)
-                cv2.putText(img, className.upper(), (box[0] + 10, box[1] + 30), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(img, str(round(confidence * 100, 2)), (box[0] + 200, box[1] + 30), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+                x, y, w, h = box
+                cv2.rectangle(img, (x, y), (x + w, y + h), color=(0, 255, 0), thickness=2)
+                cv2.putText(img, className.upper(), (x + 10, y + 30), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(img, f'{round(confidence * 100, 2)}%', (x + 200, y + 30), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+
     return img, objectInfo
 
 class VideoStream:
@@ -83,27 +96,28 @@ class VideoStream:
 
 # Main function
 if __name__ == "__main__":
-    stream = VideoStream(0).start()  
+    stream = VideoStream(0).start()
+    frame_count = 0
 
     while True:
         img = stream.read()
         if img is None:
             continue
+
         frame_count += 1
         if frame_count % 3 == 0: 
-            result, objectInfo = getObjects(img, False)
+            result, objectInfo = getObjects(img, True)
             print(objectInfo)
-        
             if objectInfo:
                 box, className = objectInfo[0]  # Get the first detected object
                 img = get_dist(box, img)  # Calculate and display distance
 
         # Display the video feed
-            cv2.imshow("Live Video", result)
+        cv2.imshow("Live Video", img)
 
         # Exit on 'q' key press
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
     # Cleanup
     stream.stop()
